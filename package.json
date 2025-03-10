@@ -1,6 +1,6 @@
 {
   "name": "@kiruse/vite-plugin-preact-signals-transformer",
-  "version": "0.1.1-beta.2",
+  "version": "0.1.1-beta.3",
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",

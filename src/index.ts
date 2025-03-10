@@ -45,6 +45,28 @@ export default function injectSignals(options: {
         let hasUseSignalsCall = false;
         const componentPaths = new Set<NodePath<t.ArrowFunctionExpression | t.FunctionDeclaration>>();
 
+        // Helper function to check if a node returns JSX
+        const checkReturnsJSX = (path: NodePath) => {
+          let returnsJSX = false;
+          path.traverse({
+            ReturnStatement(returnPath) {
+              if (returnPath.node.argument &&
+                  (t.isJSXElement(returnPath.node.argument) ||
+                   t.isJSXFragment(returnPath.node.argument))) {
+                returnsJSX = true;
+              }
+            }
+          });
+          return returnsJSX;
+        };
+
+        // Helper function to add component if it returns JSX
+        const addComponentIfValid = (path: NodePath<t.ArrowFunctionExpression | t.FunctionDeclaration>) => {
+          if (checkReturnsJSX(path)) {
+            componentPaths.add(path);
+          }
+        };
+
         // First pass: check if it's a React component and if useSignals is already imported/used
         traverse(ast, {
           ImportDeclaration(path) {
@@ -64,66 +86,69 @@ export default function injectSignals(options: {
             }
           },
           CallExpression(path) {
-            if (
-              t.isIdentifier(path.node.callee) &&
-              path.node.callee.name === 'useSignals'
-            ) {
+            const callee = path.node.callee;
+            if (t.isIdentifier(callee) && callee.name === 'useSignals') {
               hasUseSignalsCall = true;
+            }
+            // Handle any function call that takes a component function as an argument
+            else {
+              // Look through arguments to find any that are functions returning JSX
+              path.node.arguments.forEach((arg, index) => {
+                if (t.isArrowFunctionExpression(arg) || t.isFunctionExpression(arg)) {
+                  const funcPath = path.get(`arguments.${index}`) as NodePath<t.ArrowFunctionExpression>;
+                  addComponentIfValid(funcPath);
+                }
+              });
             }
           },
           FunctionDeclaration(path) {
-            // Only consider top-level function declarations or named exports
+            // Only consider top-level function declarations or named/default exports
             const parentType = path.parentPath?.type;
             if (parentType === 'Program' || parentType === 'ExportNamedDeclaration' || parentType === 'ExportDefaultDeclaration') {
-              let returnsJSX = false;
-              path.traverse({
-                ReturnStatement(returnPath) {
-                  if (returnPath.node.argument &&
-                      (t.isJSXElement(returnPath.node.argument) ||
-                       t.isJSXFragment(returnPath.node.argument))) {
-                    returnsJSX = true;
-                  }
-                }
-              });
-              if (returnsJSX) {
-                componentPaths.add(path);
-              }
+              addComponentIfValid(path);
             }
           },
           VariableDeclarator(path) {
             // Check for component definitions like: const MyComponent = () => { ... }
             const parentDecl = path.findParent(p => t.isVariableDeclaration(p.node));
             const parentType = parentDecl?.parentPath?.type;
+            const isTopLevel = parentType === 'Program' || parentType === 'ExportNamedDeclaration' || parentType === 'ExportDefaultDeclaration';
 
-            if (parentType === 'Program' || parentType === 'ExportNamedDeclaration' || parentType === 'ExportDefaultDeclaration') {
+            if (isTopLevel) {
               const init = path.node.init;
+              // Handle direct arrow/function expressions
               if (t.isArrowFunctionExpression(init) || t.isFunctionExpression(init)) {
-                let returnsJSX = false;
-                if (t.isJSXElement(init.body) || t.isJSXFragment(init.body)) {
-                  returnsJSX = true;
-                } else if (t.isBlockStatement(init.body)) {
-                  path.traverse({
-                    ReturnStatement(returnPath) {
-                      if (returnPath.node.argument &&
-                          (t.isJSXElement(returnPath.node.argument) ||
-                           t.isJSXFragment(returnPath.node.argument))) {
-                        returnsJSX = true;
-                      }
-                    }
-                  });
-                }
-                if (returnsJSX) {
-                  const initPath = path.get('init');
-                  if (Array.isArray(initPath)) {
-                    // This should never happen for 'init', but TypeScript doesn't know that
-                    if (t.isArrowFunctionExpression(initPath[0].node)) {
-                      componentPaths.add(initPath[0] as NodePath<t.ArrowFunctionExpression>);
-                    }
-                  } else if (t.isArrowFunctionExpression(initPath.node)) {
-                    componentPaths.add(initPath as NodePath<t.ArrowFunctionExpression>);
-                  }
+                const initPath = path.get('init');
+                if (!Array.isArray(initPath) && (t.isArrowFunctionExpression(initPath.node) || t.isFunctionExpression(initPath.node))) {
+                  addComponentIfValid(initPath as NodePath<t.ArrowFunctionExpression>);
                 }
               }
+              // Handle HOC wrapped components
+              else if (t.isCallExpression(init)) {
+                init.arguments.forEach((arg, index) => {
+                  if (t.isArrowFunctionExpression(arg) || t.isFunctionExpression(arg)) {
+                    const funcPath = path.get(`init.arguments.${index}`) as NodePath<t.ArrowFunctionExpression>;
+                    addComponentIfValid(funcPath);
+                  }
+                });
+              }
+            }
+          },
+          ExportDefaultDeclaration(path) {
+            const declaration = path.node.declaration;
+            // Handle direct function or arrow function exports
+            if (t.isArrowFunctionExpression(declaration) || t.isFunctionExpression(declaration)) {
+              const declPath = path.get('declaration') as NodePath<t.ArrowFunctionExpression>;
+              addComponentIfValid(declPath);
+            }
+            // Handle HOC wrapped components in default exports
+            else if (t.isCallExpression(declaration)) {
+              declaration.arguments.forEach((arg, index) => {
+                if (t.isArrowFunctionExpression(arg) || t.isFunctionExpression(arg)) {
+                  const funcPath = path.get(`declaration.arguments.${index}`) as NodePath<t.ArrowFunctionExpression>;
+                  addComponentIfValid(funcPath);
+                }
+              });
             }
           }
         });

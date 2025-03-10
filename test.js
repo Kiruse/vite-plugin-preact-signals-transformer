@@ -26,7 +26,15 @@ function foo() {
   return 42;
 }
 
-function InternalComponent() {
+function InternalComponent1() {
+  return <div>foobar</div>;
+}
+
+const InternalComponent2 = forwardRef((props, ref) => {
+  return <div>foobar</div>;
+});
+
+export default function AnotherTestComponent() {
   return <div>foobar</div>;
 }
 `;
@@ -69,8 +77,11 @@ async function testPlugin() {
   console.log('\nTransformed code:\n-----');
   console.log(result.code);
 
+  const hasHooks = ['TestComponent', 'AnotherTestComponent', 'InternalComponent1', 'InternalComponent2'];
+  const hasNoHooks = ['handleClick', 'foo'];
+
   // Check if useSignals was injected
-  if (hasImport && hasHook('TestComponent') && hasHook('InternalComponent') && hasNoHook('handleClick') && hasNoHook('foo')) {
+  if (hasImport && hasHooks.every(hasHook) && hasNoHooks.every(hasNoHook)) {
     console.log('\n✅ Plugin successfully injected useSignals!');
   } else {
     console.log('\n❌ Plugin failed to inject useSignals.');
