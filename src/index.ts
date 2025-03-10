@@ -1,8 +1,12 @@
-import generate from '@babel/generator';
+import _generate from '@babel/generator';
 import { parse } from '@babel/parser';
-import traverse, { type NodePath } from '@babel/traverse';
+import _traverse, { type NodePath } from '@babel/traverse';
 import * as t from '@babel/types';
 import type { Plugin } from 'vite';
+
+// weird hotfixes for vite.config.ts not properly importing default exports
+const traverse: typeof _traverse = (_traverse as any).default ?? _traverse;
+const generate: typeof _generate = (_generate as any).default ?? _generate;
 
 /**
  * Vite/Rollup plugin to automatically inject useSignals() call into React components.
