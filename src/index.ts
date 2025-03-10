@@ -1,6 +1,6 @@
 import _generate from '@babel/generator';
 import { parse } from '@babel/parser';
-import _traverse, { type NodePath } from '@babel/traverse';
+import _traverse, { NodePath } from '@babel/traverse';
 import * as t from '@babel/types';
 import type { Plugin } from 'vite';
 
@@ -40,10 +40,18 @@ export default function injectSignals(options: {
           plugins: ['jsx', 'typescript'],
         });
 
-        let hasReactImport = false;
         let hasSignalsImport = false;
         let hasUseSignalsCall = false;
         const componentPaths = new Set<NodePath<t.ArrowFunctionExpression | t.FunctionDeclaration>>();
+
+        // Helper function to check if a node has @noSignals comment
+        const hasNoSignalsComment = (path: NodePath) => {
+          const comments = path.node.leadingComments || [];
+          return comments.some(comment =>
+            comment.type === 'CommentLine' &&
+            comment.value.trim() === '@noSignals'
+          );
+        };
 
         // Helper function to check if a node returns JSX
         const checkReturnsJSX = (path: NodePath) => {
@@ -60,20 +68,25 @@ export default function injectSignals(options: {
           return returnsJSX;
         };
 
-        // Helper function to add component if it returns JSX
+        // Helper function to add component if it returns JSX and doesn't have @noSignals
         const addComponentIfValid = (path: NodePath<t.ArrowFunctionExpression | t.FunctionDeclaration>) => {
-          if (checkReturnsJSX(path)) {
+          if (!hasNoSignalsComment(path) && checkReturnsJSX(path)) {
             componentPaths.add(path);
           }
+        };
+
+        const isFunction = (expr: NodePath | null | undefined) => {
+          if (!expr) return false;
+          if (t.isFunctionDeclaration(expr.node)) return true;
+          if (t.isArrowFunctionExpression(expr.node)) return true;
+          if (t.isFunctionExpression(expr.node)) return true;
+          return false;
         };
 
         // First pass: check if it's a React component and if useSignals is already imported/used
         traverse(ast, {
           ImportDeclaration(path) {
             const source = path.node.source.value;
-            if (source === 'react' || source === 'preact') {
-              hasReactImport = true;
-            }
             if (source === '@preact/signals-react/runtime') {
               const specifier = path.node.specifiers.find(
                 spec => t.isImportSpecifier(spec) &&
@@ -92,13 +105,23 @@ export default function injectSignals(options: {
             }
             // Handle any function call that takes a component function as an argument
             else {
-              // Look through arguments to find any that are functions returning JSX
-              path.node.arguments.forEach((arg, index) => {
-                if (t.isArrowFunctionExpression(arg) || t.isFunctionExpression(arg)) {
-                  const funcPath = path.get(`arguments.${index}`) as NodePath<t.ArrowFunctionExpression>;
-                  addComponentIfValid(funcPath);
-                }
-              });
+              // Only process top-level calls
+              const parent = path.parentPath;
+              const isTopLevel = parent?.type === 'Program' ||
+                               (parent?.type === 'ExpressionStatement' && parent.parentPath?.type === 'Program') ||
+                               (parent?.type === 'VariableDeclarator' && parent.parentPath?.parentPath?.type === 'Program') ||
+                               (parent?.type === 'ExportDefaultDeclaration') ||
+                               (parent?.type === 'ExportNamedDeclaration');
+
+              if (isTopLevel) {
+                // Look through arguments to find any that are functions returning JSX
+                path.node.arguments.forEach((arg, index) => {
+                  if (t.isArrowFunctionExpression(arg) || t.isFunctionExpression(arg)) {
+                    const funcPath = path.get(`arguments.${index}`) as NodePath<t.ArrowFunctionExpression>;
+                    addComponentIfValid(funcPath);
+                  }
+                });
+              }
             }
           },
           FunctionDeclaration(path) {
@@ -119,9 +142,7 @@ export default function injectSignals(options: {
               // Handle direct arrow/function expressions
               if (t.isArrowFunctionExpression(init) || t.isFunctionExpression(init)) {
                 const initPath = path.get('init');
-                if (!Array.isArray(initPath) && (t.isArrowFunctionExpression(initPath.node) || t.isFunctionExpression(initPath.node))) {
-                  addComponentIfValid(initPath as NodePath<t.ArrowFunctionExpression>);
-                }
+                addComponentIfValid(initPath as NodePath<t.ArrowFunctionExpression>);
               }
               // Handle HOC wrapped components
               else if (t.isCallExpression(init)) {
@@ -135,9 +156,9 @@ export default function injectSignals(options: {
             }
           },
           ExportDefaultDeclaration(path) {
-            const declaration = path.node.declaration;
+            const { declaration } = path.node;
             // Handle direct function or arrow function exports
-            if (t.isArrowFunctionExpression(declaration) || t.isFunctionExpression(declaration)) {
+            if (isFunction(path)) {
               const declPath = path.get('declaration') as NodePath<t.ArrowFunctionExpression>;
               addComponentIfValid(declPath);
             }
@@ -150,11 +171,11 @@ export default function injectSignals(options: {
                 }
               });
             }
-          }
+          },
         });
 
         // If no React components found or already has useSignals, skip
-        if (componentPaths.size === 0 || !hasReactImport || (hasSignalsImport && hasUseSignalsCall)) {
+        if (componentPaths.size === 0 || (hasSignalsImport && hasUseSignalsCall)) {
           return null;
         }
 
