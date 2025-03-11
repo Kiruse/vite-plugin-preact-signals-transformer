@@ -1,12 +1,16 @@
-import _generate from '@babel/generator';
-import { parse } from '@babel/parser';
-import _traverse, { NodePath } from '@babel/traverse';
-import * as t from '@babel/types';
-import type { Plugin } from 'vite';
+import { type AttachedScope, attachScopes, createFilter } from '@rollup/pluginutils';
+import type { ArrowFunctionExpression, BlockStatement, Expression, FunctionDeclaration, FunctionExpression, ReturnStatement } from 'estree';
+import { walk } from 'estree-walker';
+import MagicString from 'magic-string';
+import { ProgramNode, type Plugin } from 'rollup';
 
-// weird hotfixes for vite.config.ts not properly importing default exports
-const traverse: typeof _traverse = (_traverse as any).default ?? _traverse;
-const generate: typeof _generate = (_generate as any).default ?? _generate;
+declare module 'estree' {
+  export interface BaseNode {
+    scope?: AttachedScope;
+    start: number;
+    end: number;
+  }
+}
 
 /**
  * Vite/Rollup plugin to automatically inject useSignals() call into React components.
@@ -16,232 +20,127 @@ export default function injectSignals(options: {
   include?: RegExp | RegExp[];
   exclude?: RegExp | RegExp[];
 } = {}): Plugin {
-  const include = options.include || /\.[jt]sx$/;
-  const exclude = options.exclude || /node_modules/;
+  const filter = createFilter(options.include ?? /\.[jt]sx$/, options.exclude ?? /node_modules/);
 
   return {
-    name: 'vite-plugin-inject-signals',
+    name: 'vite-plugin-preact-signals-transformer',
 
     transform(code, id) {
-      // Skip if file doesn't match include pattern or matches exclude pattern
-      if (
-        (include instanceof RegExp && !include.test(id)) ||
-        (Array.isArray(include) && !include.some(pattern => pattern.test(id))) ||
-        (exclude instanceof RegExp && exclude.test(id)) ||
-        (Array.isArray(exclude) && exclude.some(pattern => pattern.test(id)))
-      ) {
-        return null;
-      }
+      if (!filter(id)) return null;
 
+      let ast: ProgramNode | undefined;
       try {
-        // Parse the code into an AST
-        const ast = parse(code, {
-          sourceType: 'module',
-          plugins: ['jsx', 'typescript'],
-        });
-
-        let hasSignalsImport = false;
-        let hasUseSignalsCall = false;
-        const componentPaths = new Set<NodePath<t.ArrowFunctionExpression | t.FunctionDeclaration>>();
-
-        // Helper function to check if a node has @noSignals comment
-        const hasNoSignalsComment = (path: NodePath) => {
-          const comments = path.node.leadingComments || [];
-          return comments.some(comment =>
-            comment.type === 'CommentLine' &&
-            comment.value.trim() === '@noSignals'
-          );
-        };
-
-        // Helper function to check if a node returns JSX
-        const checkReturnsJSX = (path: NodePath) => {
-          let returnsJSX = false;
-          path.traverse({
-            ReturnStatement(returnPath) {
-              if (returnPath.node.argument &&
-                  (t.isJSXElement(returnPath.node.argument) ||
-                   t.isJSXFragment(returnPath.node.argument))) {
-                returnsJSX = true;
-              }
-              else if (t.isCallExpression(returnPath.node.argument) &&
-                       t.isIdentifier(returnPath.node.argument.callee) &&
-                       ['jsx', 'jsxs', 'h'].includes(returnPath.node.argument.callee.name)) {
-                returnsJSX = true;
-              }
-            }
-          });
-          return returnsJSX;
-        };
-
-        // Helper function to add component if it returns JSX and doesn't have @noSignals
-        const addComponentIfValid = (path: NodePath<t.ArrowFunctionExpression | t.FunctionDeclaration>) => {
-          if (!hasNoSignalsComment(path) && checkReturnsJSX(path)) {
-            componentPaths.add(path);
-          }
-        };
-
-        const isFunction = (expr: NodePath | null | undefined) => {
-          if (!expr) return false;
-          if (t.isFunctionDeclaration(expr.node)) return true;
-          if (t.isArrowFunctionExpression(expr.node)) return true;
-          if (t.isFunctionExpression(expr.node)) return true;
-          return false;
-        };
-
-        // First pass: check if it's a React component and if useSignals is already imported/used
-        traverse(ast, {
-          ImportDeclaration(path) {
-            const source = path.node.source.value;
-            if (source === '@preact/signals-react/runtime') {
-              const specifier = path.node.specifiers.find(
-                spec => t.isImportSpecifier(spec) &&
-                       ((t.isIdentifier(spec.imported) && spec.imported.name === 'useSignals') ||
-                        spec.local.name === 'useSignals')
-              );
-              if (specifier) {
-                hasSignalsImport = true;
-              }
-            }
-          },
-          CallExpression(path) {
-            const callee = path.node.callee;
-            if (t.isIdentifier(callee) && callee.name === 'useSignals') {
-              hasUseSignalsCall = true;
-            }
-            // Handle any function call that takes a component function as an argument
-            else {
-              // Only process top-level calls
-              const parent = path.parentPath;
-              const isTopLevel = parent?.type === 'Program' ||
-                               (parent?.type === 'ExpressionStatement' && parent.parentPath?.type === 'Program') ||
-                               (parent?.type === 'VariableDeclarator' && parent.parentPath?.parentPath?.type === 'Program') ||
-                               (parent?.type === 'ExportDefaultDeclaration') ||
-                               (parent?.type === 'ExportNamedDeclaration');
-
-              if (isTopLevel) {
-                // Look through arguments to find any that are functions returning JSX
-                path.node.arguments.forEach((arg, index) => {
-                  if (t.isArrowFunctionExpression(arg) || t.isFunctionExpression(arg)) {
-                    const funcPath = path.get(`arguments.${index}`) as NodePath<t.ArrowFunctionExpression>;
-                    addComponentIfValid(funcPath);
-                  }
-                });
-              }
-            }
-          },
-          FunctionDeclaration(path) {
-            // Only consider top-level function declarations or named/default exports
-            const parentType = path.parentPath?.type;
-            if (parentType === 'Program' || parentType === 'ExportNamedDeclaration' || parentType === 'ExportDefaultDeclaration') {
-              addComponentIfValid(path);
-            }
-          },
-          VariableDeclarator(path) {
-            // Check for component definitions like: const MyComponent = () => { ... }
-            const parentDecl = path.findParent(p => t.isVariableDeclaration(p.node));
-            const parentType = parentDecl?.parentPath?.type;
-            const isTopLevel = parentType === 'Program' || parentType === 'ExportNamedDeclaration' || parentType === 'ExportDefaultDeclaration';
-
-            if (isTopLevel) {
-              const init = path.node.init;
-              // Handle direct arrow/function expressions
-              if (t.isArrowFunctionExpression(init) || t.isFunctionExpression(init)) {
-                const initPath = path.get('init');
-                addComponentIfValid(initPath as NodePath<t.ArrowFunctionExpression>);
-              }
-              // Handle HOC wrapped components
-              else if (t.isCallExpression(init)) {
-                init.arguments.forEach((arg, index) => {
-                  if (t.isArrowFunctionExpression(arg) || t.isFunctionExpression(arg)) {
-                    const funcPath = path.get(`init.arguments.${index}`) as NodePath<t.ArrowFunctionExpression>;
-                    addComponentIfValid(funcPath);
-                  }
-                });
-              }
-            }
-          },
-          ExportDefaultDeclaration(path) {
-            const { declaration } = path.node;
-            // Handle direct function or arrow function exports
-            if (isFunction(path)) {
-              const declPath = path.get('declaration') as NodePath<t.ArrowFunctionExpression>;
-              addComponentIfValid(declPath);
-            }
-            // Handle HOC wrapped components in default exports
-            else if (t.isCallExpression(declaration)) {
-              declaration.arguments.forEach((arg, index) => {
-                if (t.isArrowFunctionExpression(arg) || t.isFunctionExpression(arg)) {
-                  const funcPath = path.get(`declaration.arguments.${index}`) as NodePath<t.ArrowFunctionExpression>;
-                  addComponentIfValid(funcPath);
-                }
-              });
-            }
-          },
-        });
-
-        // If no React components found or already has useSignals, skip
-        if (componentPaths.size === 0 || (hasSignalsImport && hasUseSignalsCall)) {
-          return null;
-        }
-
-        // Second pass: inject the import and useSignals call
-        let bodyPath: NodePath<t.Program> | undefined;
-        traverse(ast, {
-          Program(path) {
-            bodyPath = path;
-          }
-        });
-
-        if (bodyPath) {
-          // Add import if needed
-          if (!hasSignalsImport) {
-            const importDeclaration = t.importDeclaration(
-              [t.importSpecifier(t.identifier('useSignals'), t.identifier('useSignals'))],
-              t.stringLiteral('@preact/signals-react/runtime')
-            );
-            bodyPath.node.body.unshift(importDeclaration);
-          }
-
-          // Inject useSignals() only into component-level functions
-          for (const componentPath of componentPaths) {
-            const node = componentPath.node;
-            if (t.isArrowFunctionExpression(node)) {
-              // Handle arrow functions
-              if (t.isBlockStatement(node.body)) {
-                const useSignalsCall = t.expressionStatement(
-                  t.callExpression(t.identifier('useSignals'), [])
-                );
-                node.body.body.unshift(useSignalsCall);
-              } else if (t.isJSXElement(node.body) || t.isJSXFragment(node.body)) {
-                const originalBody = node.body;
-                node.body = t.blockStatement([
-                  t.expressionStatement(
-                    t.callExpression(t.identifier('useSignals'), [])
-                  ),
-                  t.returnStatement(originalBody)
-                ]);
-              }
-            } else if (t.isFunctionDeclaration(node) && node.body.type === 'BlockStatement') {
-              // Handle function declarations
-              const useSignalsCall = t.expressionStatement(
-                t.callExpression(t.identifier('useSignals'), [])
-              );
-              node.body.body.unshift(useSignalsCall);
-            }
-          }
-
-          // Generate the modified code
-          const output = generate(ast, {}, code);
-          return {
-            code: output.code,
-            map: output.map
-          };
-        }
+        ast = this.parse(code, { jsx: true });
       } catch (error) {
-        console.error(`Error processing ${id}:`, error);
+        this.warn(`Error parsing ${id}: ${error}`);
+      }
+      if (!ast) return null;
+
+      const hasImport = ast.body.some(
+        node => node.type === 'ImportDeclaration' &&
+          node.source.value === '@preact/signals-react/runtime' &&
+          node.specifiers.some(
+            specifier => specifier.type === 'ImportSpecifier' &&
+              specifier.imported.type === 'Identifier' &&
+              specifier.imported.name === 'useSignals'
+            )
+        );
+
+      const components = new Set<FunctionDeclaration | FunctionExpression | ArrowFunctionExpression>();
+      const magicString = new MagicString(code);
+      let scope = attachScopes(ast, 'scope');
+
+      walk(ast, {
+        enter(node) {
+          if (node.scope) {
+            scope = node.scope;
+          }
+
+          switch (node.type) {
+            case 'FunctionDeclaration':
+            case 'FunctionExpression':
+            case 'ArrowFunctionExpression': {
+              if (node.body.type === 'BlockStatement') {
+                const returnStatements = findReturnStatements(node.body, scope);
+                for (const stmt of returnStatements) {
+                  if (isJsx(stmt.argument)) {
+                    components.add(node);
+                  }
+                }
+              }
+              break;
+            }
+          }
+        },
+        leave(node) {
+          if (node.scope) {
+            scope = scope.parent!;
+          }
+        }
+      });
+
+      console.log(components);
+      if (!components.size) return null;
+
+      if (!hasImport) {
+        magicString.prepend(`import { useSignals } from '@preact/signals-react/runtime';\n`);
       }
 
-      return null;
-    }
+      for (const component of components) {
+        if (component.body.type !== 'BlockStatement') continue; // shouldn't happen
+        magicString.prependLeft(component.body.start+1, '\n\tuseSignals();\n');
+      }
+
+      return {
+        code: magicString.toString(),
+        map: magicString.generateMap({ hires: true }),
+      };
+    },
   };
+}
+
+function isJsx(expr: Expression | null | undefined) {
+  if (!expr) return false;
+  if ((expr.type as string) === 'JSXElement') return true;
+  if ((expr.type as string) === 'JSXFragment') return true;
+  if (expr.type === 'CallExpression' && expr.callee.type === 'Identifier' && ['jsx', 'jsxs', '_jsx', '_jsxs', 'h'].includes(expr.callee.name)) {
+    return true;
+  }
+  return false;
+}
+
+function findReturnStatements(node: BlockStatement, scope: AttachedScope) {
+  const result: ReturnStatement[] = [];
+  let isHomeScope = true; // Whether the current scope is the home scope
+
+  walk(node, {
+    enter(node) {
+      switch (node.type) {
+        case 'FunctionDeclaration':
+          if (!node.scope) throw new Error('FunctionDeclaration has no scope');
+          isHomeScope = false;
+          break;
+        case 'FunctionExpression':
+          if (!node.scope) throw new Error('FunctionExpression has no scope');
+          isHomeScope = false;
+          break;
+        case 'ArrowFunctionExpression':
+          if (!node.scope) throw new Error('ArrowFunctionExpression has no scope');
+          isHomeScope = false;
+          break;
+        case 'ReturnStatement':
+          if (isHomeScope) {
+            result.push(node);
+          }
+          break;
+      }
+    },
+    leave(node) {
+      if ('scope' in node) {
+        isHomeScope = (node as any).scope.parent === scope;
+      }
+    },
+  });
+
+  return result;
 }
