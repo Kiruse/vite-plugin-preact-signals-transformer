@@ -63,6 +63,11 @@ export default function injectSignals(options: {
                    t.isJSXFragment(returnPath.node.argument))) {
                 returnsJSX = true;
               }
+              else if (t.isCallExpression(returnPath.node.argument) &&
+                       t.isIdentifier(returnPath.node.argument.callee) &&
+                       ['jsx', 'jsxs', 'h'].includes(returnPath.node.argument.callee.name)) {
+                returnsJSX = true;
+              }
             }
           });
           return returnsJSX;
