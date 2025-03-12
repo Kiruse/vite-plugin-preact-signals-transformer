@@ -12,11 +12,23 @@ declare module 'estree' {
   }
 }
 
+const jsxIdents = [
+  'jsx',
+  'jsxs',
+  'jsxDEV',
+  'jsxsDEV',
+  '_jsx',
+  '_jsxs',
+  '_jsxDEV',
+  '_jsxsDEV',
+  'h',
+];
+
 /**
  * Vite/Rollup plugin to automatically inject useSignals() call into React components.
  * Generated with Cursor's AI Composer.
  */
-export default function injectSignals(options: {
+export default function preactSignalsTransformer(options: {
   include?: RegExp | RegExp[];
   exclude?: RegExp | RegExp[];
 } = {}): Plugin {
@@ -63,6 +75,7 @@ export default function injectSignals(options: {
               if (node.body.type === 'BlockStatement') {
                 const returnStatements = findReturnStatements(node.body, scope);
                 for (const stmt of returnStatements) {
+                  console.log(stmt.argument);
                   if (isJsx(stmt.argument)) {
                     components.add(node);
                   }
@@ -79,7 +92,6 @@ export default function injectSignals(options: {
         }
       });
 
-      console.log(components);
       if (!components.size) return null;
 
       if (!hasImport) {
@@ -103,7 +115,7 @@ function isJsx(expr: Expression | null | undefined) {
   if (!expr) return false;
   if ((expr.type as string) === 'JSXElement') return true;
   if ((expr.type as string) === 'JSXFragment') return true;
-  if (expr.type === 'CallExpression' && expr.callee.type === 'Identifier' && ['jsx', 'jsxs', '_jsx', '_jsxs', 'h'].includes(expr.callee.name)) {
+  if (expr.type === 'CallExpression' && expr.callee.type === 'Identifier' && jsxIdents.includes(expr.callee.name)) {
     return true;
   }
   return false;

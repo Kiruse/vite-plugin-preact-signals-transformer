@@ -1,6 +1,6 @@
 {
   "name": "@kiruse/vite-plugin-preact-signals-transformer",
-  "version": "0.1.2-alpha.1",
+  "version": "0.1.2-alpha.2",
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -13,10 +13,9 @@
   },
   "scripts": {
     "build": "tsc",
+    "dev": "tsc --watch",
     "prebuild": "rm -rf dist",
-    "prepack": "bun run build",
-    "test": "cd test && rm -rf dist && bunx rollup -c",
-    "pretest": "bun run build"
+    "prepack": "bun run build"
   },
   "dependencies": {
     "@rollup/pluginutils": "^5.1.4",
