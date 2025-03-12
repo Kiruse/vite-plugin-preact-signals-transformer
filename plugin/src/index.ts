@@ -1,5 +1,5 @@
 import { type AttachedScope, attachScopes, createFilter } from '@rollup/pluginutils';
-import type { ArrowFunctionExpression, BlockStatement, Expression, FunctionDeclaration, FunctionExpression, ReturnStatement } from 'estree';
+import type { ArrowFunctionExpression, BlockStatement, CallExpression, Expression, FunctionDeclaration, FunctionExpression, ReturnStatement } from 'estree';
 import { walk } from 'estree-walker';
 import MagicString from 'magic-string';
 import { ProgramNode, type Plugin } from 'rollup';
@@ -11,6 +11,8 @@ declare module 'estree' {
     end: number;
   }
 }
+
+type ComponentExpression = ArrowFunctionExpression | FunctionExpression | FunctionDeclaration;
 
 const jsxIdents = [
   'jsx',
@@ -58,7 +60,7 @@ export default function preactSignalsTransformer(options: {
             )
         );
 
-      const components = new Set<FunctionDeclaration | FunctionExpression | ArrowFunctionExpression>();
+      const components = new Set<ComponentExpression>();
       const magicString = new MagicString(code);
       let scope = attachScopes(ast, 'scope');
 
@@ -73,12 +75,20 @@ export default function preactSignalsTransformer(options: {
             case 'FunctionExpression':
             case 'ArrowFunctionExpression': {
               if (node.body.type === 'BlockStatement') {
-                const returnStatements = findReturnStatements(node.body, scope);
+                const returnStatements = findReturnStatements(scope, node.body);
                 for (const stmt of returnStatements) {
-                  console.log(stmt.argument);
                   if (isJsx(stmt.argument)) {
                     components.add(node);
                   }
+                }
+              }
+              break;
+            }
+            case 'CallExpression': {
+              if (id.match(/Button\.tsx$/)) {
+                const inner = getHoc(scope, node);
+                if (inner) {
+                  components.add(inner);
                 }
               }
               break;
@@ -121,7 +131,25 @@ function isJsx(expr: Expression | null | undefined) {
   return false;
 }
 
-function findReturnStatements(node: BlockStatement, scope: AttachedScope) {
+function getHoc(scope: AttachedScope, expr: CallExpression | null | undefined): ComponentExpression | undefined {
+  if (!expr) return;
+  if (scope.parent) return; // if there is a scope parent, it's not global/root scope
+  if (expr.callee.type !== 'Identifier' || expr.arguments.length !== 1) return; // expect identifier
+
+  let [arg] = expr.arguments;
+  if (arg.type === 'AssignmentExpression')
+    arg = arg.right;
+  if (arg.type === 'ArrowFunctionExpression' || arg.type === 'FunctionExpression') {
+    if (arg.body.type !== 'BlockStatement') return;
+    const returnStmts = findReturnStatements(scope, arg.body);
+    if (returnStmts.some(stmt => isJsx(stmt.argument))) {
+      return arg;
+    }
+  }
+  return;
+}
+
+function findReturnStatements(scope: AttachedScope, node: BlockStatement) {
   const result: ReturnStatement[] = [];
   let isHomeScope = true; // Whether the current scope is the home scope
 

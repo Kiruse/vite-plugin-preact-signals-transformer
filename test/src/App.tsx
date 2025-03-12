@@ -1,5 +1,6 @@
 import { useSignal } from '@preact/signals-react';
 import reactLogo from './assets/react.svg'
+import { Button } from './components/Button';
 import viteLogo from '/vite.svg'
 import './App.css'
 
@@ -18,9 +19,9 @@ function App() {
       </div>
       <h1>Vite + React</h1>
       <div className="card">
-        <button onClick={() => count.value++}>
+        <Button onClick={() => count.value++}>
           count is {count.value}
-        </button>
+        </Button>
         <p>
           Edit <code>src/App.tsx</code> and save to test HMR
         </p>
