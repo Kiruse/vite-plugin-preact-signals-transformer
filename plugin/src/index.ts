@@ -85,11 +85,9 @@ export default function preactSignalsTransformer(options: {
               break;
             }
             case 'CallExpression': {
-              if (id.match(/Button\.tsx$/)) {
-                const inner = getHoc(scope, node);
-                if (inner) {
-                  components.add(inner);
-                }
+              const inner = getHoc(scope, node);
+              if (inner) {
+                components.add(inner);
               }
               break;
             }
