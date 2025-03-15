@@ -4,6 +4,17 @@ import { Button } from './components/Button';
 import viteLogo from '/vite.svg'
 import './App.css'
 
+const items = [
+  {
+    id: 1,
+    name: 'Item 1',
+  },
+  {
+    id: 2,
+    name: 'Item 2',
+  },
+];
+
 function App() {
   const count = useSignal(0);
 
@@ -29,6 +40,11 @@ function App() {
       <p className="read-the-docs">
         Click on the Vite and React logos to learn more
       </p>
+      <ul>
+        {items.map((item) => {
+          return <li key={item.id}>{item.name}</li>
+        })}
+      </ul>
     </>
   )
 }

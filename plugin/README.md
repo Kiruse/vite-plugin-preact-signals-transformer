@@ -1,7 +1,7 @@
 # Preact Signals Transformer for Vite/Rollup
 This Vite/Rollup plugin automatically injects `useSignals()` calls into React components that use Preact signals, as well as the necessary `import` statements.
 
-This is a very rudimentary plugin that does not check if a component even uses signals. It just adds `useSignals()` to every single component. You can selectively disable injection by adding a `// @noSignals` comment before the function.
+This is a very rudimentary plugin that does not check if a component even uses signals. It just adds `useSignals()` to every single detected component.
 
 ## Installation
 Install with your favorite package manager's equivalent of:
@@ -47,7 +47,7 @@ It does not check if you even use signals.
 - The plugin uses static analysis to identify React components, so it may not detect all components in complex scenarios.
 - It only works with function components (not class components).
 - It assumes that components that return JSX are React components.
-- It may occasionally misidentify functions as components. If it does, you can add the `// @noSignals` comment before the function to force the plugin to ignore it.
+- It may occasionally misidentify functions as components. If it does, please open an issue with a minimally reproducable example.
 
 ## License
 Copyright 2025 Kiruse (https://kiruse.dev)

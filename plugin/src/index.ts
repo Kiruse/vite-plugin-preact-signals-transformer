@@ -77,7 +77,7 @@ export default function preactSignalsTransformer(options: {
               if (node.body.type === 'BlockStatement') {
                 const returnStatements = findReturnStatements(scope, node.body);
                 for (const stmt of returnStatements) {
-                  if (isJsx(stmt.argument)) {
+                  if (isJsx(stmt.argument) && !scope.parent?.parent) {
                     components.add(node);
                   }
                 }
